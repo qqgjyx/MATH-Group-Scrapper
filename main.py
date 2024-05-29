@@ -1,12 +1,17 @@
+# %%
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
 
+# %%
 # Base URL of the webpage
 base_url = "https://mediadive.dsmz.de"
 
+
+# %%
 # Function to extract data from a single page
 def extract_data_from_page(url, page):
     params = {"p": page}
@@ -48,27 +53,83 @@ def extract_data_from_page(url, page):
 
     return data, soup
 
+
+# %%
+# Function to fetch and print the HTML structure of a given URL
+def fetch_html_structure(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        return soup
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching HTML content from {url}: {e}")
+        return None
+
+
+# %%
+# Function to extract key data from the HTML structure
+def extract_key_data(soup):
+    if not soup:
+        return None
+
+    # Extracting the title
+    title = soup.find('title').text.strip() if soup.find('title') else 'N/A'
+
+    # Extracting the strain name
+    strain_name = soup.find('h2').text.strip() if soup.find('h2') else 'N/A'
+
+    # Extracting the synonyms
+    synonyms = []
+    paragraphs = soup.find_all('p')
+    for p in paragraphs:
+        bold_text = p.find('b', string='Synonyms:')
+        if bold_text:
+            for content in p.contents:
+                if content.name == 'a':
+                    synonyms.append(content.get_text(strip=True))
+                    synonyms.append('href: ' + content.get('href'))
+                elif isinstance(content, str) and content.strip():
+                    synonyms.extend(content.split(', '))
+            break
+
+    # Extracting growth media details
+    media_details = []
+    media_boxes = soup.find_all('div', class_='box')
+
+    for box in media_boxes:
+        media_title = box.find('h3', class_='title').text.strip() if box.find('h3', 'title') else 'N/A'
+        media_link = box.find('a', class_='link colorless')['href'] if box.find('a', 'link colorless') else 'N/A'
+
+        # Corrected logic to check for growth observation
+        growth_observed = 'Yes' if box.find('i', class_='ph ph-lg ph-check text-success') else 'No'
+
+        growth_conditions = box.find('span', class_='badge danger').text.strip() if box.find('span',
+                                                                                             'badge danger') else 'N/A'
+
+        media_details.append({
+            'media_title': media_title,
+            'media_link': media_link,
+            'growth_observed': growth_observed,
+            'growth_conditions': growth_conditions
+        })
+
+    return {
+        'title': title,
+        'strain_name': strain_name,
+        'synonyms': synonyms,
+        'media_details': media_details
+    }
+
+
+# %%
 # Function to extract detailed strain information
 def extract_strain_details(url):
-    retries = 3
-    for i in range(retries):
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
+    soup = fetch_html_structure(url)
+    return extract_key_data(soup)
 
-            details = {}
-            # Extract synonyms and growth conditions
-            details['Synonyms'] = soup.find('div', class_='synonyms').get_text(strip=True) if soup.find('div',
-                                                                                                        class_='synonyms') else ""
-            details['Growth Conditions'] = soup.find('div', class_='growth-conditions').get_text(
-                strip=True) if soup.find('div', class_='growth-conditions') else ""
-            return details
-        except (requests.exceptions.RequestException, ConnectionResetError) as e:
-            print(f"Error fetching strain details from {url}: {e}. Retrying ({i + 1}/{retries})...")
-            time.sleep(5)
-    return {"Synonyms": "", "Growth Conditions": ""}
 
+# %%
 # Function to extract medium information
 def extract_medium_details(url):
     retries = 3
@@ -84,17 +145,20 @@ def extract_medium_details(url):
             medium_details['Components'] = {
                 item.find('span', class_='compound-name').get_text(strip=True): item.find('span',
                                                                                           class_='compound-amount').get_text(
-                    strip=True) for item in soup.find_all('div', class_='compound')}
+                    strip=True) for item in soup.find_all('div', 'compound')}
             return medium_details
         except (requests.exceptions.RequestException, ConnectionResetError) as e:
             print(f"Error fetching medium details from {url}: {e}. Retrying ({i + 1}/{retries})...")
             time.sleep(5)
     return {"Medium Name": "", "Components": {}}
 
+
+# %%
+# Main scraping process
 all_data = []
 
-# Scrape data from the first 5R pages
-for page in range(1, 6):
+# Scrape data from the first 20 pages
+for page in range(1, 21):
     try:
         # Extract data from the current page
         page_data, soup = extract_data_from_page(base_url + "/strains", page)
@@ -111,29 +175,43 @@ for page in range(1, 6):
 columns = ["Organism Group", "Name", "Name Link", "Taxonomy Link", "Growth Media Links", "External Links"]
 df = pd.DataFrame(all_data, columns=columns)
 
-# Extract detailed information for each strain and medium
-detailed_data = []
-for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Extracting strain details"):
+
+# %%
+# Extract detailed information for each strain and medium in parallel
+def process_strain(row):
     strain_details = extract_strain_details(row['Name Link'])
-    for medium_link in tqdm(row['Growth Media Links'], desc=f"Extracting media for {row['Name']}", leave=False):
-        medium_details = extract_medium_details(medium_link)
-        detailed_data.append({
-            "Organism Group": row['Organism Group'],
-            "Name": row['Name'],
-            "Synonyms": strain_details['Synonyms'],
-            "Growth Conditions": strain_details['Growth Conditions'],
-            "Medium Name": medium_details['Medium Name'],
-            "Components": medium_details['Components']
-        })
-    # Save progress periodically
-    if (index + 1) % 10 == 0:
-        df_detailed = pd.DataFrame(detailed_data)
-        df_detailed.to_csv('dsmz_detailed_strains_partial.csv', index=False)
+    detailed_entries = []
+    if strain_details:
+        for medium_link in row['Growth Media Links']:
+            medium_details = extract_medium_details(medium_link)
+            detailed_entries.append({
+                "Organism Group": row['Organism Group'],
+                "Name": row['Name'],
+                "Synonyms": ', '.join(strain_details['synonyms']),
+                "Growth Conditions": strain_details['media_details'],
+                "Medium Name": medium_details['Medium Name'],
+                "Components": medium_details['Components']
+            })
+    return detailed_entries
 
-# Create a detailed DataFrame
-df_detailed = pd.DataFrame(detailed_data)
 
-# Save the detailed DataFrame to a CSV file
-df_detailed.to_csv('dsmz_detailed_strains.csv', index=False)
+if __name__ == '__main__':
+    pool = Pool(processes=cpu_count())
+    results = []
 
-print("Detailed data scraped and saved to dsmz_detailed_strains.csv")
+    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Extracting strain details"):
+        result = pool.apply_async(process_strain, args=(row,))
+        results.append(result)
+
+    detailed_data = []
+    for result in tqdm(results, desc="Collecting results"):
+        detailed_data.extend(result.get())
+
+    pool.close()
+    pool.join()
+
+    # Save the detailed data to a DataFrame and then to a CSV file
+    df_detailed = pd.DataFrame(detailed_data)
+    df_detailed.to_csv('dsmz_detailed_strains.csv', index=False)
+
+    print("Detailed data scraped and saved to dsmz_detailed_strains.csv")
