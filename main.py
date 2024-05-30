@@ -1,17 +1,14 @@
-# %%
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# %%
 # Base URL of the webpage
 base_url = "https://mediadive.dsmz.de"
 
 
-# %%
 # Function to extract data from a single page
 def extract_data_from_page(url, page):
     params = {"p": page}
@@ -42,6 +39,7 @@ def extract_data_from_page(url, page):
         row_data.append(taxonomy_link)
 
         # Growth Media links
+        growth_media_tag = columns[3].find('a')
         growth_media_links = [base_url + a['href'] for a in columns[3].find_all('a')]
         row_data.append(growth_media_links)
 
@@ -51,10 +49,9 @@ def extract_data_from_page(url, page):
 
         data.append(row_data)
 
-    return data, soup
+    return data
 
 
-# %%
 # Function to fetch and print the HTML structure of a given URL
 def fetch_html_structure(url):
     try:
@@ -67,7 +64,6 @@ def fetch_html_structure(url):
         return None
 
 
-# %%
 # Function to extract key data from the HTML structure
 def extract_key_data(soup):
     if not soup:
@@ -122,14 +118,12 @@ def extract_key_data(soup):
     }
 
 
-# %%
 # Function to extract detailed strain information
 def extract_strain_details(url):
     soup = fetch_html_structure(url)
     return extract_key_data(soup)
 
 
-# %%
 # Function to extract medium information
 def extract_medium_details(url):
     retries = 3
@@ -145,7 +139,7 @@ def extract_medium_details(url):
             medium_details['Components'] = {
                 item.find('span', class_='compound-name').get_text(strip=True): item.find('span',
                                                                                           class_='compound-amount').get_text(
-                    strip=True) for item in soup.find_all('div', 'compound')}
+                    strip=True) for item in soup.find_all('div', class_='compound')}
             return medium_details
         except (requests.exceptions.RequestException, ConnectionResetError) as e:
             print(f"Error fetching medium details from {url}: {e}. Retrying ({i + 1}/{retries})...")
@@ -153,38 +147,25 @@ def extract_medium_details(url):
     return {"Medium Name": "", "Components": {}}
 
 
-# %%
 # Main scraping process
-all_data = []
-
-# Scrape data from the first 20 pages
-for page in range(1, 46236):
+def scrape_page_data(page):
     try:
         # Extract data from the current page
-        page_data, soup = extract_data_from_page(base_url + "/strains", page)
-        all_data.extend(page_data)
-
-        # Print the current page number
-        print(f"Processing page {page}")
+        page_data = extract_data_from_page(base_url + "/strains", page)
+        return page_data
     except (requests.exceptions.RequestException, ConnectionResetError) as e:
         print(f"Error fetching data from page {page}: {e}. Skipping this page...")
-        time.sleep(5)
-        continue
-
-# Create a DataFrame from the extracted data
-columns = ["Organism Group", "Name", "Name Link", "Taxonomy Link", "Growth Media Links", "External Links"]
-df = pd.DataFrame(all_data, columns=columns)
+        return []
 
 
-# %%
-# Extract detailed information for each strain and medium in parallel
-def process_strain(row):
+# Function to extract detailed information for each strain and medium
+def extract_strain_and_media_details(row):
     strain_details = extract_strain_details(row['Name Link'])
-    detailed_entries = []
+    detailed_data = []
     if strain_details:
         for medium_link in row['Growth Media Links']:
             medium_details = extract_medium_details(medium_link)
-            detailed_entries.append({
+            detailed_data.append({
                 "Organism Group": row['Organism Group'],
                 "Name": row['Name'],
                 "Synonyms": ', '.join(strain_details['synonyms']),
@@ -192,26 +173,37 @@ def process_strain(row):
                 "Medium Name": medium_details['Medium Name'],
                 "Components": medium_details['Components']
             })
-    return detailed_entries
+    return detailed_data
 
 
-if __name__ == '__main__':
-    pool = Pool(processes=cpu_count())
-    results = []
+def main():
+    all_data = []
 
-    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Extracting strain details"):
-        result = pool.apply_async(process_strain, args=(row,))
-        results.append(result)
+    # Scrape data from the first 20 pages using multiprocessing
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(scrape_page_data, page) for page in range(1, 21)]
+        for future in tqdm(as_completed(futures), total=20, desc="Scraping pages"):
+            all_data.extend(future.result())
 
+    # Create a DataFrame from the extracted data
+    columns = ["Organism Group", "Name", "Name Link", "Taxonomy Link", "Growth Media Links", "External Links"]
+    df = pd.DataFrame(all_data, columns=columns)
+
+    # Extract detailed information for each strain and medium
     detailed_data = []
-    for result in tqdm(results, desc="Collecting results"):
-        detailed_data.extend(result.get())
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(extract_strain_and_media_details, row) for index, row in df.iterrows()]
+        for future in tqdm(as_completed(futures), total=df.shape[0], desc="Extracting strain and media details"):
+            detailed_data.extend(future.result())
 
-    pool.close()
-    pool.join()
-
-    # Save the detailed data to a DataFrame and then to a CSV file
+    # Create a detailed DataFrame
     df_detailed = pd.DataFrame(detailed_data)
+
+    # Save the detailed DataFrame to a CSV file
     df_detailed.to_csv('dsmz_detailed_strains.csv', index=False)
 
     print("Detailed data scraped and saved to dsmz_detailed_strains.csv")
+
+
+if __name__ == "__main__":
+    main()
