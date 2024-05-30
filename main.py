@@ -158,7 +158,7 @@ def extract_medium_details(url):
 all_data = []
 
 # Scrape data from the first 20 pages
-for page in range(1, 21):
+for page in range(1, 46236):
     try:
         # Extract data from the current page
         page_data, soup = extract_data_from_page(base_url + "/strains", page)
