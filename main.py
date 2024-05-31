@@ -61,9 +61,9 @@ def extract_data_from_page(url, page, retries=5):
 
 # Main scraping process
 all_data = []
-num_pages = 2312  # Adjust the number of pages you want to scrape
+num_pages = 20  # Adjust the number of pages you want to scrape
 
-max_workers = 96 # Adjust based on the MacBook M3 Pro capabilities
+max_workers = 16  # Adjust based on the MacBook M3 Pro capabilities
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
     future_to_page = {executor.submit(extract_data_from_page, base_url + "/strains", page): page for page in
@@ -86,8 +86,15 @@ df.to_csv('initial_dsmz_data.csv', index=False)
 # Load the initial data
 df = pd.read_csv('initial_dsmz_data.csv')
 
+import requests
+from bs4 import BeautifulSoup
+import time
+import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 
-# Functions for extracting detailed data
+
+# Function to fetch HTML content and parse it with BeautifulSoup
 def fetch_html_structure(url, retries=5):
     for attempt in range(retries):
         try:
@@ -101,6 +108,7 @@ def fetch_html_structure(url, retries=5):
     return None
 
 
+# Function to extract key data from the parsed HTML content
 def extract_key_data(soup):
     if not soup:
         return None
@@ -144,16 +152,28 @@ def extract_key_data(soup):
     }
 
 
+# Function to extract strain details from a row of the DataFrame
 def extract_strain_details(row):
     url = row['Name Link']
     soup = fetch_html_structure(url)
     return extract_key_data(soup)
 
 
-# Extract detailed information for each strain
+# Function to save detailed data incrementally
+def save_detailed_data(detailed_data):
+    df_detailed = pd.DataFrame(detailed_data)
+    df_detailed.to_csv('detailed_dsmz_data.csv', index=False)
+
+
+# Load the initial DataFrame (assuming it's loaded in variable df)
+# df = pd.read_csv('initial_data.csv')  # Load your initial DataFrame here
+
+# Initialize an empty list to hold detailed data
 detailed_data = []
 num_strains = df.shape[0]
+max_workers = 10  # Adjust the number of workers as needed
 
+# Extract detailed information for each strain with ThreadPoolExecutor
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
     future_to_index = {executor.submit(extract_strain_details, row): index for index, row in df.iterrows()}
 
@@ -166,13 +186,34 @@ with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 "Synonyms": ', '.join(strain_details['synonyms']),
                 "Growth Conditions": strain_details['media_details']
             })
+            # Save incrementally after each strain is processed
+            save_detailed_data(detailed_data)
 
-# Create a detailed DataFrame
+# Sort the detailed data based on the Name to maintain order
+detailed_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
+
+# Create the final detailed DataFrame
 df_detailed = pd.DataFrame(detailed_data)
 df_detailed.to_csv('detailed_dsmz_data.csv', index=False)
 
-# Merge the initial and detailed DataFrames
-merged_df = df.merge(df_detailed, on='Name', how='left', sort=False)
+print("Detailed data saved to detailed_dsmz_data.csv")
+
+# Load the detailed data
+df_detailed = pd.read_csv('detailed_dsmz_data.csv')
+
+# Merge the initial and detailed DataFrames with progress bar
+merged_data = []
+for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Merging data"):
+    detailed_row = df_detailed[df_detailed['Name'] == row['Name']]
+    if not detailed_row.empty:
+        merged_row = {**row.to_dict(), **detailed_row.iloc[0].to_dict()}
+    else:
+        merged_row = row.to_dict()
+    merged_data.append(merged_row)
+
+# Convert the merged data to a DataFrame and save it
+merged_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
+merged_df = pd.DataFrame(merged_data)
 merged_df.to_csv('merged_dsmz_strains.csv', index=False)
 
 print("Merged data saved to merged_dsmz_strains.csv")
