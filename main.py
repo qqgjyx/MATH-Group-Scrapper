@@ -61,9 +61,9 @@ def extract_data_from_page(url, page, retries=5):
 
 # Main scraping process
 all_data = []
-num_pages = 20  # Adjust the number of pages you want to scrape
+num_pages = 2313  # Adjust the number of pages you want to scrape
 
-max_workers = 16  # Adjust based on the MacBook M3 Pro capabilities
+max_workers = 64  # Adjust based on the MacBook M3 Pro capabilities
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
     future_to_page = {executor.submit(extract_data_from_page, base_url + "/strains", page): page for page in
@@ -171,7 +171,7 @@ def save_detailed_data(detailed_data):
 # Initialize an empty list to hold detailed data
 detailed_data = []
 num_strains = df.shape[0]
-max_workers = 10  # Adjust the number of workers as needed
+max_workers = 64  # Adjust the number of workers as needed
 
 # Extract detailed information for each strain with ThreadPoolExecutor
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -196,7 +196,7 @@ detailed_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
 df_detailed = pd.DataFrame(detailed_data)
 df_detailed.to_csv('detailed_dsmz_data.csv', index=False)
 
-print("Detailed data saved to detailed_dsmz_data.csv")
+# print("Detailed data saved to detailed_dsmz_data.csv")
 
 # Load the detailed data
 df_detailed = pd.read_csv('detailed_dsmz_data.csv')
@@ -216,4 +216,4 @@ merged_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
 merged_df = pd.DataFrame(merged_data)
 merged_df.to_csv('merged_dsmz_strains.csv', index=False)
 
-print("Merged data saved to merged_dsmz_strains.csv")
+# print("Merged data saved to merged_dsmz_strains.csv")
