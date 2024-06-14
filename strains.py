@@ -75,7 +75,7 @@ def extract_data_from_page(url, page, retries=5):
 all_data = []
 num_pages = 2314  # Adjust the number of pages you want to scrape
 
-max_workers = 128  # Adjust based on the MacBook M3 Pro capabilities
+max_workers = 256  # Adjust based on the MacBook M3 Pro capabilities
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
     future_to_page = {executor.submit(extract_data_from_page, base_url + "/strains", page): page for page in
@@ -193,28 +193,13 @@ with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Save incrementally after each strain is processed
             save_detailed_data(detailed_data)
 
-# Sort the detailed data based on the Name to maintain order
-detailed_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
+# # Sort the detailed data based on the Name to maintain order
+# detailed_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
 
 # Create the final detailed DataFrame
 df_detailed = pd.DataFrame(detailed_data)
+merged_df = pd.merge(df, df_detailed, on="Name", how='left')
 
-# Load the detailed data
-df_detailed = pd.read_csv('detailed_dsmz_data.csv')
-
-# Merge the initial and detailed DataFrames with progress bar
-merged_data = []
-for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Merging data"):
-    detailed_row = df_detailed[df_detailed['Name'] == row['Name']]
-    if not detailed_row.empty:
-        merged_row = {**row.to_dict(), **detailed_row.iloc[0].to_dict()}
-    else:
-        merged_row = row.to_dict()
-    merged_data.append(merged_row)
-
-# Convert the merged data to a DataFrame and save it
-merged_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
-merged_df = pd.DataFrame(merged_data).fillna("")
 merged_df
 # %%
 link_data_temp = list
@@ -255,7 +240,7 @@ def scrape_link(old_df, on_old_name, extractor_method, new_names):
                 data = future.result()
                 link_data_temp.append(data)
         link_df = pd.DataFrame(link_data_temp, columns=new_names)
-        merged_df = pd.merge(old_df, link_df, on=on_old_name, how='left').fillna("")
+        merged_df = pd.merge(old_df, link_df, on=on_old_name, how='left')
     return merged_df
 
 
@@ -349,6 +334,8 @@ def dsmzlink_method(dsmzlink, soup):
     if sixteens_rrna_tag:
         sixteens_rrna = sixteens_rrna_tag[0]
         sixteens_rrna_link = sixteens_rrna_tag[1]
+        if sixteens_rrna_link != '' and sixteens_rrna_link is not None:
+            sixteens_rrna_link = sixteens_rrna_link + '.1?report=fasta'
     else:
         sixteens_rrna = None
         sixteens_rrna_link = None
@@ -450,4 +437,6 @@ merged_merged_merged_df = scrape_link(merged_merged_df, 'Bacdive Link', bacdiv_m
                                       ["Bacdive Link", "Synonyms Full"])
 
 merged_merged_merged_df
+# %%
+merged_merged_merged_df.to_csv("strains.csv", index=False)
 # %%
