@@ -68,7 +68,8 @@ def extract_data_from_page(url, page, retries=5):
 
             return data
         except (requests.exceptions.RequestException, ConnectionResetError) as e:
-            print(f"Error fetching page {page}: {e}. Retrying {attempt + 1}/{retries}...")
+            if attempt >= 3:
+                print(f"Error fetching page {page}: {e}. Retrying {attempt + 1}/{retries}...")
             time.sleep(1)  # Wait before retrying
     return []
 
@@ -109,8 +110,9 @@ def fetch_html_structure(url, retries=5):
             soup = BeautifulSoup(response.content, 'html.parser')
             return soup
         except (requests.exceptions.RequestException, ConnectionResetError) as e:
-            print(f"Error fetching HTML content from {url}: {e}. Retrying {attempt + 1}/{retries}...")
-            time.sleep(5)  # Wait before retrying
+            if attempt >= 3:
+                print(f"Error fetching HTML content from {url}: {e}. Retrying {attempt + 1}/{retries}...")
+            time.sleep(1)  # Wait before retrying
     return None
 
 
@@ -216,7 +218,8 @@ def extract_data_from_link(link, extractor_method, pbar, new_names, retries=5):
             pbar.update(1)
             return data
         except (requests.exceptions.RequestException, ConnectionResetError) as e:
-            print(f"Error fetching link {link}: {e}. Retrying {attempt + 1}/{retries}...")
+            if attempt >= 3:
+                print(f"Error fetching link {link}: {e}. Retrying {attempt + 1}/{retries}...")
             time.sleep(1)  # Wait before retrying
     return [link].extend([None] * (len(new_names) - 1))
 
@@ -427,7 +430,8 @@ def bacdiv_method(bacdivlink, soup, retries=5):
                 strip=True) else None
             return [bacdivlink, synonyms_full]
         except (requests.exceptions.RequestException, ConnectionResetError) as e:
-            print(f"Error fetching link {href}: {e}. Retrying {attempt + 1}/{retries}...")
+            if attempt >= 3:
+                print(f"Error fetching link {href}: {e}. Retrying {attempt + 1}/{retries}...")
             time.sleep(1)  # Wait before retrying
     return [bacdivlink, href]
 
