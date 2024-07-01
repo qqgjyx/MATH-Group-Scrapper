@@ -2,10 +2,12 @@
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import numpy as np
 import time
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import re
+import ast
+import os
 
 # %%
 # Base URL of the webpage
@@ -75,7 +77,7 @@ def extract_data_from_page(url, page, retries=5):
 all_data = []
 num_pages = 2314  # Adjust the number of pages you want to scrape
 
-max_workers = 256  # Adjust based on the MacBook M3 Pro capabilities
+max_workers = 128  # Adjust based on the MacBook M3 Pro capabilities
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
     future_to_page = {executor.submit(extract_data_from_page, base_url + "/strains", page): page for page in
@@ -163,19 +165,13 @@ def extract_strain_details(row):
     return extract_key_data(soup)
 
 
-# Function to save detailed data incrementally
-def save_detailed_data(detailed_data):
-    df_detailed = pd.DataFrame(detailed_data)
-    df_detailed.to_csv('detailed_dsmz_data.csv', index=False)
-
-
 # Load the initial DataFrame (assuming it's loaded in variable df)
 # df = pd.read_csv('initial_data.csv')  # Load your initial DataFrame here
 
 # Initialize an empty list to hold detailed data
 detailed_data = []
 num_strains = df.shape[0]
-max_workers = 10  # Adjust the number of workers as needed
+max_workers = 128  # Adjust the number of workers as needed
 
 # Extract detailed information for each strain with ThreadPoolExecutor
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -190,8 +186,6 @@ with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 "Synonyms": ', '.join(strain_details['synonyms']),
                 "Growth Conditions": strain_details['media_details']
             })
-            # Save incrementally after each strain is processed
-            save_detailed_data(detailed_data)
 
 # # Sort the detailed data based on the Name to maintain order
 # detailed_data.sort(key=lambda x: int(x['Name'].split(' ')[-1]))
@@ -215,7 +209,7 @@ def extract_data_from_link(link, extractor_method, pbar, new_names, retries=5):
             extractor = Extractor(link, soup, extractor_method)
             data = extractor.extract()
             if data is None:
-                print('No soup for {}'.format(link))
+                # print('No soup for {}'.format(link))
                 # pbar.set_description('Failed to extract data from {}'.format(link))
                 data = [link]
                 data.extend([None] * (len(new_names) - 1))
@@ -296,11 +290,13 @@ def dsmzlink_method(dsmzlink, soup):
     risk_tag = get_comp_value(soup, 'Risk group: ')
     if risk_tag:
         risk_value = '"' + risk_tag.get_text(strip=True) + '"'
+        risk_group = risk_tag.get_text(strip=True).split(' ')[0].split('(')[0] if risk_tag else None
+        class_by = risk_tag.find('a').get_text(strip=True) if risk_tag.find('a') else \
+        risk_tag.get_text(strip=True).split(' ')[-1].replace(')', '')
     else:
         risk_value = None
-    risk_group = risk_tag.get_text(strip=True).split(' ')[0].split('(')[0] if risk_tag else None
-    class_by = risk_tag.find('a').get_text(strip=True) if risk_tag.find('a') else \
-    risk_tag.get_text(strip=True).split(' ')[-1].replace(')', '')
+        risk_group = None
+        class_by = None
 
     nagoya_value = get_field_value(soup, 'Nagoya Protocol Restrictions: ')
     history_value = get_field_value(soup, 'History: ')
@@ -321,8 +317,11 @@ def dsmzlink_method(dsmzlink, soup):
         for i, part in enumerate(text):
             if ':' in part:
                 key = part.strip()
-                value = [links[i].text, links[i]['href']]
-                sequence_dict[key] = value
+                if i > len(links) - 1:
+                    print("more genbank key than value in {}".format(name_value))
+                else:
+                    value = [links[i].text, links[i]['href']]
+                    sequence_dict[key] = value
     whole_genome_tag = sequence_dict.get("whole genome shotgun sequence:")
     if whole_genome_tag:
         whole_genome = whole_genome_tag[0]
@@ -437,6 +436,66 @@ merged_merged_merged_df = scrape_link(merged_merged_df, 'Bacdive Link', bacdiv_m
                                       ["Bacdive Link", "Synonyms Full"])
 
 merged_merged_merged_df
+
+
 # %%
-merged_merged_merged_df.to_csv("strains.csv", index=False)
+
+# Define the function to create the links
+def create_16rs_link(genbank_dict):
+    if pd.isna(genbank_dict):
+        return np.nan
+    else:
+        return genbank_dict.get('16S rRNA gene:')[1] + "']" if genbank_dict.get('16S rRNA gene:') else np.nan
+
+
+# Apply the function to the DataFrame and create a new column
+merged_merged_merged_df['16S rRNA Link'] = merged_merged_merged_df['Genbank dict'].apply(create_16rs_link)
+
+# Display the DataFrame
+merged_merged_merged_df
+
+
+# %%
+def ncbi_method(sixteenS_link, soup):
+    # Find the <a> tag with the id 'btn_download'
+    a_tag = soup.find('a', id='btn_download')
+
+    if a_tag:
+        # Extract the URL from the href attribute
+        download_url = a_tag['href']
+
+        # Send a GET request to download the file
+        response = requests.get(download_url)
+
+        # Check if the request was successful
+        if response.status_code == 200:
+            # Specify the directory and file name
+            download_dir = 'temp'
+            os.makedirs(download_dir, exist_ok=True)  # Create directory if it doesn't exist
+            # file_path = os.path.join(download_dir, sixteenS_link.split('/')[-1].split("'")[0])
+            file_path = os.path.join(download_dir, 'downloaded_file.fasta')
+
+            # Write the content to the file
+            with open(file_path, 'wb') as file:
+                file.write(response.content)
+
+            # Read the content from the file
+            with open(file_path, 'r') as file:
+                lines = file.readlines()
+
+            # Extract content from the second row to the end
+            sixteenS = lines[1:]  # Get all lines from the second row to the end
+        else:
+            print("Failed to download the file.")
+    else:
+        print("Failed to download the file." + sixteenS_link)
+        sixteenS = None
+
+    return [sixteenS_link, sixteenS]
+
+
+four_merged_df = scrape_link(merged_merged_merged_df, '16S rRNA Link', ncbi_method, ['16S rRNA Link', '16S rRNA gene'])
+four_merged_df
+# %%
+four_merged_df.to_csv('strains_v2.csv')
 # %%
